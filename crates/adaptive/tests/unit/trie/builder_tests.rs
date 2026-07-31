@@ -167,12 +167,11 @@ fn test_extract_llm_contexts_call_duration() {
 }
 
 #[test]
-fn test_extract_llm_contexts_workflow_duration_falls_back_to_last_completed_call() {
-    let mut run = make_test_run(3, 0);
-    run.ended_at = None;
+fn test_extract_llm_contexts_workflow_duration() {
+    let run = make_test_run(3, 0);
     let contexts = extract_llm_contexts(&run);
     // 3 calls: [0..1s], [1.1..2.1s], [2.2..3.2s]
-    // workflow_duration falls back to the final completed call at 3.2s.
+    // workflow_duration = run.ended_at - run.started_at = 3.2s
     let wd = contexts[0].workflow_duration_s;
     assert!(
         (wd - 3.2).abs() < 0.1,

@@ -91,9 +91,9 @@ fn stability_result(scores: &[(f64, f64)], observation_count: u32) -> StabilityA
 #[test]
 fn economics_policy_returns_no_breakpoints_when_expected_savings_are_non_positive() {
     let prompt_ir = prompt_ir_with_token_counts(&[1800]);
-    let stability = stability_result(&[(0.1, 0.1)], 2);
+    let stability = stability_result(&[(1.0, 1.0)], 1);
 
-    let plan = plan_breakpoints(&prompt_ir, &stability, 2, &model_capabilities(4, 1024));
+    let plan = plan_breakpoints(&prompt_ir, &stability, 1, &model_capabilities(4, 1024));
 
     assert!(
         plan.planned_breakpoints.is_empty(),

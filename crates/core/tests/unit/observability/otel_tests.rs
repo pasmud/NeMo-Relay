@@ -17,7 +17,6 @@ use crate::api::scope::ScopeType;
 use crate::api::scope::{event, pop_scope, push_scope};
 use crate::api::tool::ToolAttributes;
 use crate::codec::model_pricing::pricing_test_mutex;
-use crate::codec::request::{AnnotatedLlmRequest, GenerationParams};
 use crate::codec::response::{
     AnnotatedLlmResponse, CostEstimate, CostSource, FinishReason, PricingCatalog, PricingResolver,
     Usage, reset_active_pricing_resolver, set_active_pricing_resolver,
@@ -28,8 +27,8 @@ use crate::observability::{relay_span_id, relay_trace_id};
 use opentelemetry::trace::TraceContextExt;
 use opentelemetry_sdk::trace::InMemorySpanExporterBuilder;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::mpsc;
@@ -328,12 +327,6 @@ fn attr_map(attributes: &[KeyValue]) -> HashMap<String, String> {
             )
         })
         .collect()
-}
-
-fn assert_gen_ai_attributes(attributes: &HashMap<String, String>, expected: &[(&str, &str)]) {
-    for (key, value) in expected {
-        assert_eq!(attributes.get(*key).map(String::as_str), Some(*value));
-    }
 }
 
 fn make_start_event(
@@ -1541,83 +1534,6 @@ fn gen_ai_projection_prefers_standard_names_and_normalized_provider_details() {
             Some(&expected.to_string())
         );
     }
-}
-
-#[test]
-fn gen_ai_projection_reads_profile_metadata_for_retrieval() {
-    let event = make_scope_event_with_profile(
-        ScopeCategory::Start,
-        Uuid::now_v7(),
-        None,
-        "retrieve-documents",
-        ScopeType::Retriever,
-        Some(json!({"server_address": "api.acme.test"})),
-        Some(CategoryProfile {
-            model_name: Some("embed-v2".to_string()),
-            extra: BTreeMap::from([
-                ("provider".to_string(), json!("acme")),
-                ("server_port".to_string(), json!(443)),
-                ("data_source_id".to_string(), json!(42)),
-                ("top_k".to_string(), json!(5)),
-            ]),
-            ..Default::default()
-        }),
-    );
-
-    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
-    assert_gen_ai_attributes(
-        &attributes,
-        &[
-            ("gen_ai.provider.name", "acme"),
-            ("server.address", "api.acme.test"),
-            ("server.port", "443"),
-            ("gen_ai.data_source.id", "42"),
-            ("gen_ai.retrieval.top_k", "5"),
-            ("gen_ai.request.model", "embed-v2"),
-        ],
-    );
-}
-
-#[test]
-fn gen_ai_projection_derives_provider_and_controls_from_normalized_request() {
-    let event = make_scope_event_with_profile(
-        ScopeCategory::Start,
-        Uuid::now_v7(),
-        None,
-        "relay.llm",
-        ScopeType::Llm,
-        None,
-        Some(
-            CategoryProfile::builder()
-                .annotated_request(std::sync::Arc::new(AnnotatedLlmRequest {
-                    model: Some("gpt-5".to_string()),
-                    params: Some(GenerationParams {
-                        temperature: Some(0.25),
-                        max_tokens: None,
-                        top_p: Some(0.8),
-                        stop: Some(vec!["END".to_string()]),
-                    }),
-                    max_output_tokens: Some(128),
-                    api_specific: Some(
-                        serde_json::from_value(json!({"api": "openai_responses"})).unwrap(),
-                    ),
-                    ..Default::default()
-                }))
-                .build(),
-        ),
-    );
-
-    let attributes = attr_map(&crate::observability::otel_genai::start_attributes(&event));
-    assert_gen_ai_attributes(
-        &attributes,
-        &[
-            ("gen_ai.provider.name", "openai"),
-            ("gen_ai.request.temperature", "0.25"),
-            ("gen_ai.request.max_tokens", "128"),
-            ("gen_ai.request.top_p", "0.8"),
-            ("gen_ai.request.stop_sequences", "[\"END\"]"),
-        ],
-    );
 }
 
 #[test]

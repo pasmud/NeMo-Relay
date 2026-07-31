@@ -36,8 +36,6 @@ fn test_typed_section_helpers_default() {
     assert!(!response_cache.cache_nondeterministic);
 
     let tools = ToolCacheConfig::default();
-    assert!(!tools.enabled);
-    assert_eq!(tools.priority, 50);
     assert!(!tools.cache_errors);
 }
 

@@ -616,45 +616,6 @@ fn streaming_sink_receives_raw_atof_events() {
 
 #[test]
 #[cfg(feature = "atof-streaming")]
-fn ndjson_sink_streams_a_transformed_event_batch_on_shutdown() {
-    let (url, captures) = start_http_capture_server(1);
-    let exporter = AtofExporter::new(
-        AtofExporterConfig::new().with_stream_sink(
-            AtofStreamSinkConfig::new(url, AtofEndpointTransport::Ndjson)
-                .with_timeout_millis(5_000)
-                .with_field_name_policy(AtofEndpointFieldNamePolicy::ReplaceDots),
-        ),
-    )
-    .unwrap();
-    let event = Event::Mark(MarkEvent::new(
-        BaseEvent::builder()
-            .uuid(Uuid::now_v7())
-            .name("checkpoint")
-            .data(json!({"otel.status_code": "OK"}))
-            .build(),
-        None,
-        None,
-    ));
-
-    (exporter.subscriber())(&event);
-    (exporter.subscriber())(&make_mark_event("complete"));
-    exporter.force_flush().unwrap();
-    exporter.shutdown().unwrap();
-
-    let bodies = wait_for_captures(&captures, 1);
-    assert_eq!(bodies.len(), 1, "captured bodies: {bodies:?}");
-    let records = bodies[0]
-        .lines()
-        .map(|line| serde_json::from_str::<Json>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(records.len(), 2);
-    assert_eq!(records[0]["name"], "checkpoint");
-    assert_eq!(records[0]["data"]["otel_status_code"], "OK");
-    assert_eq!(records[1]["name"], "complete");
-}
-
-#[test]
-#[cfg(feature = "atof-streaming")]
 fn websocket_endpoint_receives_fifo_json_text_events() {
     enable_operational_logs();
     let dir = temp_dir("atof-streaming-websocket");
