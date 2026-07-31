@@ -31,6 +31,10 @@ Rust code that constructs `AdaptiveConfig` with an exhaustive struct literal
 must add `response_cache: None`. Prefer `..AdaptiveConfig::default()` when the
 literal should remain compatible with new optional fields.
 
+Rust code that constructs `ResponseCacheConfig` with an exhaustive struct
+literal must also add `tools: None`. Prefer `..ResponseCacheConfig::default()`
+when the literal should remain compatible with new optional cache surfaces.
+
 ### Migrate Middleware Callbacks
 
 The following callback families are now asynchronous: conditional execution
