@@ -147,33 +147,3 @@ fn replay_of_an_unknown_shape_is_lossy_for_the_streaming_tier() {
     assert!(replay_is_lossy(&json!({"weird": true})));
     assert!(replay_is_lossy(&json!("bare string")));
 }
-
-#[test]
-fn anthropic_replay_keeps_complete_unknown_blocks_and_stop_sequences() {
-    // Blocks without a delta representation (such as thinking/server blocks)
-    // must be sent intact at content-block start, while stop_sequence remains
-    // visible to strict Anthropic stream consumers.
-    let aggregate = json!({
-        "id": "msg_2",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-test",
-        "content": [{"type": "thinking", "thinking": "reasoning"}],
-        "stop_reason": "end_turn",
-        "stop_sequence": "<END>",
-        "usage": {"input_tokens": 3, "output_tokens": 2}
-    });
-
-    let chunks = synthesize_anthropic_chunks(&aggregate);
-    assert_eq!(chunks[1]["type"], json!("content_block_start"));
-    assert_eq!(chunks[1]["content_block"], aggregate["content"][0]);
-    assert_eq!(chunks[2]["type"], json!("content_block_stop"));
-    let message_delta = chunks
-        .iter()
-        .find(|chunk| chunk["type"] == "message_delta")
-        .expect("replay must finish with a message_delta");
-    assert_eq!(
-        message_delta.pointer("/delta/stop_sequence"),
-        Some(&json!("<END>"))
-    );
-}

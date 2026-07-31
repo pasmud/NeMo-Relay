@@ -37,6 +37,7 @@ fn test_typed_section_helpers_default() {
 
     let tools = ToolCacheConfig::default();
     assert!(!tools.cache_errors);
+    assert_eq!(tools.priority, 150);
 }
 
 #[test]
