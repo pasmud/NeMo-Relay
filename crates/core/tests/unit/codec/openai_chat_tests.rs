@@ -1754,3 +1754,25 @@ fn openai_chat_streaming_codec_skips_null_usage_chunks() {
     assert_eq!(assembled["usage"]["prompt_tokens"], json!(1));
     assert_eq!(assembled["usage"]["total_tokens"], json!(2));
 }
+
+#[test]
+fn openai_chat_streaming_codec_keeps_sparse_choice_frames_replayable() {
+    // A provider can terminate or truncate a stream after declaring a choice
+    // index but before sending its delta. Response-cache must still be able to
+    // assemble a safe buffered body instead of panicking or inventing content.
+    let codec = OpenAIChatStreamingCodec::default();
+    let mut collector = codec.collector();
+    let finalizer = codec.finalizer();
+
+    collector(json!({"choices": [{"index": 2}]})).unwrap();
+
+    let assembled = finalizer();
+    assert_eq!(
+        assembled["choices"],
+        json!([{
+            "index": 2,
+            "message": {"role": "assistant", "content": null},
+            "finish_reason": null,
+        }])
+    );
+}
