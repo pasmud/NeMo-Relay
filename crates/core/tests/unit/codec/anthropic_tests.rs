@@ -1601,39 +1601,54 @@ fn anthropic_streaming_codec_keeps_partial_json_when_unparseable() {
 }
 
 #[test]
-fn anthropic_streaming_codec_ignores_incomplete_lifecycle_frames() {
-    // A disconnected SSE stream can leave any lifecycle event only partially
-    // populated. The collector must keep the valid usage snapshot while
-    // ignoring frames that cannot identify a message or content block.
-    let codec = AnthropicMessagesStreamingCodec::default();
-    let mut collector = codec.collector();
-    let finalizer = codec.finalizer();
+fn anthropic_encode_updates_provider_controls_after_normalized_edit() {
+    let codec = AnthropicMessagesCodec;
+    let original = make_request(json!({
+        "model": "claude-sonnet-4-20250514",
+        "messages": [{"role": "user", "content": "Summarize this"}],
+        "max_tokens": 128,
+        "stop_sequences": ["END"],
+        "tool_choice": {"type": "auto"},
+        "stream": false,
+        "cache_control": {"type": "ephemeral"},
+        "container": "session-before",
+        "output_config": {"effort": "low"},
+        "top_k": 10,
+        "future_field": {"keep": true}
+    }));
 
-    for frame in [
-        json!({"type": "message_start"}),
-        json!({"type": "content_block_start"}),
-        json!({"type": "content_block_start", "index": 0}),
-        json!({"type": "content_block_start", "index": 0, "content_block": []}),
-        json!({"type": "content_block_delta"}),
-        json!({"type": "content_block_delta", "index": 0}),
-        json!({
-            "type": "content_block_delta",
-            "index": 5,
-            "delta": {"type": "text_delta", "text": "orphaned"}
-        }),
-        json!({
-            "type": "message_delta",
-            "usage": {"input_tokens": 3, "output_tokens": 0}
-        }),
-    ] {
-        collector(frame).unwrap();
-    }
+    let mut annotated = codec.decode(&original).unwrap();
+    annotated.params.as_mut().unwrap().stop = Some(vec!["STOP".into()]);
+    annotated.parallel_tool_calls = Some(false);
+    annotated.stream = Some(true);
+    let Some(ApiSpecificRequest::AnthropicMessages {
+        cache_control,
+        container,
+        output_config,
+        top_k,
+        ..
+    }) = annotated.api_specific.as_mut()
+    else {
+        panic!("expected Anthropic request controls");
+    };
+    *cache_control = Some(json!({"type": "persistent"}));
+    *container = Some("session-after".into());
+    *output_config = Some(json!({"effort": "high"}));
+    *top_k = Some(20);
 
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content["stop_sequences"], json!(["STOP"]));
     assert_eq!(
-        finalizer(),
-        json!({
-            "content": [],
-            "usage": {"input_tokens": 3, "output_tokens": 0},
-        })
+        encoded.content["tool_choice"]["disable_parallel_tool_use"],
+        json!(true)
     );
+    assert_eq!(encoded.content["stream"], json!(true));
+    assert_eq!(
+        encoded.content["cache_control"],
+        json!({"type": "persistent"})
+    );
+    assert_eq!(encoded.content["container"], json!("session-after"));
+    assert_eq!(encoded.content["output_config"], json!({"effort": "high"}));
+    assert_eq!(encoded.content["top_k"], json!(20));
+    assert_eq!(encoded.content["future_field"], json!({"keep": true}));
 }

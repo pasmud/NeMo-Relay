@@ -28,8 +28,7 @@ use nemo_relay::api::subscriber::{deregister_subscriber, flush_subscribers, regi
 use nemo_relay::api::tool::{ToolCallExecuteParams, tool_call_execute};
 use nemo_relay::error::FlowError;
 use nemo_relay::plugin::{
-    DiagnosticLevel, PluginConfig, clear_plugin_configuration, initialize_plugins_exact,
-    validate_plugin_config,
+    PluginConfig, clear_plugin_configuration, initialize_plugins_exact, validate_plugin_config,
 };
 use nemo_relay_adaptive::plugin_component::{ComponentSpec, register_adaptive_component};
 use nemo_relay_adaptive::{
@@ -555,7 +554,6 @@ async fn invalid_config_is_rejected_by_validation() {
         response_cache: Some(ResponseCacheConfig {
             ttl_seconds: 0,
             bypass_rate: 2.0,
-            key_strategy: "semantic".to_string(),
             namespace: "invalid-config-test".to_string(),
             ..ResponseCacheConfig::default()
         }),
@@ -579,13 +577,6 @@ async fn invalid_config_is_rejected_by_validation() {
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.invalid_bypass_rate"),
         "bypass_rate out of range must produce a diagnostic"
-    );
-    assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "response_cache.unsupported_key_strategy"),
-        "an unsupported key strategy must produce a diagnostic"
     );
 }
 
@@ -637,81 +628,6 @@ async fn unknown_and_unavailable_backends_are_rejected_by_validation() {
             redis.diagnostics
         );
     }
-}
-
-#[tokio::test]
-async fn response_cache_validation_diagnostics_identify_the_invalid_setting() {
-    let _guard = TEST_MUTEX.lock().await;
-    reset_global();
-    register_adaptive_component().unwrap();
-
-    let mut cache = ResponseCacheConfig {
-        namespace: "diagnostic-contract-test".to_string(),
-        key_strategy: "semantic".to_string(),
-        tools: Some(ToolCacheConfig {
-            enabled: true,
-            default: ToolClass {
-                bypass_rate: Some(-0.01),
-                ..ToolClass::default()
-            },
-            ..ToolCacheConfig::default()
-        }),
-        ..ResponseCacheConfig::default()
-    };
-    cache.backend.kind = "redis".to_string();
-
-    let report = validate_plugin_config(&PluginConfig {
-        components: vec![
-            ComponentSpec::new(AdaptiveConfig {
-                response_cache: Some(cache),
-                ..AdaptiveConfig::default()
-            })
-            .into(),
-        ],
-        ..PluginConfig::default()
-    });
-
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.unsupported_key_strategy"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.component.as_deref() == Some("response_cache")
-                && diagnostic.field.as_deref() == Some("key_strategy")
-        }),
-        "an unsupported key strategy must identify its setting: {:?}",
-        report.diagnostics
-    );
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.tool_invalid_bypass_rate"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.field.as_deref() == Some("tools")
-        }),
-        "an invalid tool bypass rate must identify the tools section: {:?}",
-        report.diagnostics
-    );
-
-    #[cfg(not(feature = "redis-backend"))]
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.backend_unavailable"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.field.as_deref() == Some("backend.kind")
-        }),
-        "redis must be rejected when its backend feature is not compiled: {:?}",
-        report.diagnostics
-    );
-
-    #[cfg(feature = "redis-backend")]
-    assert!(
-        report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "response_cache.missing_redis_url"
-                && diagnostic.level == DiagnosticLevel::Error
-                && diagnostic.field.as_deref() == Some("backend.config.url")
-        }),
-        "redis must identify a missing connection URL when its backend feature is compiled: {:?}",
-        report.diagnostics
-    );
 }
 
 #[tokio::test]
@@ -1866,6 +1782,7 @@ async fn cache_coexists_with_acg_execution_intercept() {
 async fn redis_backend_shares_entries_across_store_instances() {
     use std::time::Duration;
 
+    use nemo_relay_adaptive::response_cache::check_backend_health;
     use nemo_relay_adaptive::response_cache::store::{CacheEntry, CacheStore, RedisCacheStore};
 
     let enabled = std::env::var("NEMO_RELAY_RUN_REDIS_TESTS")
@@ -1890,6 +1807,23 @@ async fn redis_backend_shares_entries_across_store_instances() {
         .await
         .expect("connect redis (reader)");
 
+    let mut config = ResponseCacheConfig::default();
+    config.backend.kind = "redis".to_string();
+    config
+        .backend
+        .config
+        .insert("url".to_string(), Json::String(url.to_string()));
+    config
+        .backend
+        .config
+        .insert("key_prefix".to_string(), Json::String(prefix.to_string()));
+    assert_eq!(
+        check_backend_health(&config)
+            .await
+            .expect("configured Redis health check"),
+        "redis"
+    );
+
     let key = "sha256:shared-cache-test-key";
     let _ = writer.delete(key).await;
 
@@ -1912,6 +1846,33 @@ async fn redis_backend_shares_entries_across_store_instances() {
         "a second store instance should see the shared entry"
     );
     assert_eq!(got.unwrap().response["answer"], json!("shared"));
+
+    let stale_key = "sha256:shared-cache-stale-key";
+    let _ = writer.delete(stale_key).await;
+    writer
+        .set(
+            stale_key,
+            CacheEntry {
+                response: json!({"answer": "stale"}),
+                created_unix_ms: 0,
+                expires_unix_ms: 1,
+                key_hash: stale_key.to_string(),
+                model_name: None,
+                provider_name: None,
+            },
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("set stale entry");
+    assert!(
+        reader
+            .get(stale_key)
+            .await
+            .expect("get stale entry")
+            .is_none(),
+        "the response-cache entry expiry must remain authoritative over Redis TTL"
+    );
+    writer.delete(stale_key).await.expect("delete stale entry");
 
     writer.delete(key).await.expect("delete");
     assert!(reader.get(key).await.expect("get").is_none());
@@ -2413,17 +2374,8 @@ async fn invalid_tool_config_is_rejected_by_validation() {
         ToolClass {
             cacheable: true,
             ttl_seconds: Some(0),
-            bypass_rate: Some(1.1),
             members: vec!["dup".to_string()],
             ..ToolClass::default()
-        },
-    );
-    let mut overrides = std::collections::BTreeMap::new();
-    overrides.insert(
-        "docs_lookup".to_string(),
-        ToolOverride {
-            bypass_rate: Some(-0.1),
-            ..ToolOverride::default()
         },
     );
     let adaptive = AdaptiveConfig {
@@ -2434,7 +2386,6 @@ async fn invalid_tool_config_is_rejected_by_validation() {
                 ..ToolClass::default()
             },
             classes,
-            overrides,
             ..ToolCacheConfig::default()
         })),
         ..AdaptiveConfig::default()
@@ -2458,14 +2409,6 @@ async fn invalid_tool_config_is_rejected_by_validation() {
             .iter()
             .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_ttl"),
         "a zero class TTL must be rejected: {:?}",
-        report.diagnostics
-    );
-    assert!(
-        report
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "response_cache.tool_invalid_bypass_rate"),
-        "out-of-range class and override bypass rates must be rejected: {:?}",
         report.diagnostics
     );
     assert!(

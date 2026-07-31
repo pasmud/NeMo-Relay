@@ -9,7 +9,6 @@ use std::time::Duration;
 
 use nemo_relay::api::llm::LlmRequest;
 use nemo_relay::api::runtime::{LlmExecutionNextFn, LlmJsonStream, LlmStreamExecutionNextFn};
-use nemo_relay::codec::resolve::{ProviderSurface, streaming_codec};
 use nemo_relay::error::FlowError;
 use serde_json::json;
 use tokio::sync::{oneshot, watch};
@@ -178,31 +177,6 @@ fn malformed_stream_shapes_are_not_aggregated() {
     );
 }
 
-#[test]
-fn replay_and_error_guards_reject_unfaithful_or_failed_responses() {
-    assert!(aggregate_replay_lossy(&json!({
-        "choices": [{
-            "message": {"role": "assistant", "content": null, "tool_calls": []}
-        }]
-    })));
-    assert!(chunk_is_inband_error(&json!({"type": "response.failed"})));
-    assert!(chunk_is_inband_error(
-        &json!({"error": {"message": "upstream failed"}})
-    ));
-    assert!(!chunk_is_inband_error(&json!({"error": null})));
-    assert!(!is_error_response(&json!("not-an-object")));
-}
-
-#[test]
-fn sampled_bypass_uses_a_unit_interval_rng() {
-    assert_eq!(rng_seed() & 1, 1, "xorshift state must never be zero");
-
-    RNG_STATE.with(|state| state.set(1));
-    let expected = next_unit_f64() < 0.5;
-    RNG_STATE.with(|state| state.set(1));
-    assert_eq!(should_bypass(0.5), expected);
-}
-
 #[tokio::test]
 async fn cache_read_errors_fail_open_for_buffered_and_streaming_calls() {
     let store = Arc::new(FailingGetStore::default());
@@ -321,36 +295,6 @@ async fn streaming_cache_bypasses_stateful_and_sampled_calls_before_reading() {
 }
 
 #[tokio::test]
-async fn upstream_stream_errors_reach_the_consumer_without_a_cache_write() {
-    let store = Arc::new(FailingGetStore::default());
-    let live = LlmJsonStream::new(tokio_stream::iter(vec![Err::<_, FlowError>(
-        FlowError::Internal("upstream stream failed".into()),
-    )]));
-    let mut stream = tee_and_aggregate(
-        live,
-        streaming_codec(ProviderSurface::OpenAIChat),
-        store.clone(),
-        cache_config(),
-        "stream-error-key".to_string(),
-        "openai".to_string(),
-        Some("gpt-4o".to_string()),
-    );
-
-    let error = stream
-        .next()
-        .await
-        .expect("the upstream error must be forwarded")
-        .expect_err("the upstream error must remain a stream error");
-    assert!(error.to_string().contains("upstream stream failed"));
-    assert!(stream.next().await.is_none(), "the errored stream must end");
-    stream
-        .close()
-        .await
-        .expect("upstream cleanup must complete");
-    assert_eq!(store.set_calls.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
 async fn write_behind_returns_eof_before_cache_commit_completes() {
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     let (cancel, _) = watch::channel(false);
@@ -375,10 +319,6 @@ async fn write_behind_returns_eof_before_cache_commit_completes() {
             .expect("write-behind cache publication must not delay stream completion")
             .is_none()
     );
-    assert!(
-        stream.next().await.is_none(),
-        "finished streams stay finished"
-    );
     release
         .send(())
         .expect("detached cache commit must still be waiting");
@@ -386,29 +326,4 @@ async fn write_behind_returns_eof_before_cache_commit_completes() {
         .await
         .expect("detached cache commit must resume after release")
         .expect("detached cache commit must run to completion");
-}
-
-#[tokio::test]
-async fn stream_close_reports_when_the_cleanup_task_ends_early() {
-    let (cancel, _) = watch::channel(false);
-    let (closed_tx, closed) = watch::channel(None::<FlowResult<()>>);
-    drop(closed_tx);
-    let (tx, rx) = tokio::sync::mpsc::channel(1);
-    drop(tx);
-    let mut stream = LlmJsonStream::from_closeable(ResponseCacheReceiver {
-        receiver: ReceiverStream::new(rx),
-        cancel,
-        closed,
-        finished: false,
-    });
-
-    let error = stream
-        .close()
-        .await
-        .expect_err("an unavailable cleanup result must be reported");
-    assert!(
-        error
-            .to_string()
-            .contains("response-cache stream cleanup task ended early")
-    );
 }

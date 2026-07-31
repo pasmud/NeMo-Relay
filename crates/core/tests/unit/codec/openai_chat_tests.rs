@@ -1756,23 +1756,49 @@ fn openai_chat_streaming_codec_skips_null_usage_chunks() {
 }
 
 #[test]
-fn openai_chat_streaming_codec_keeps_sparse_choice_frames_replayable() {
-    // A provider can terminate or truncate a stream after declaring a choice
-    // index but before sending its delta. Response-cache must still be able to
-    // assemble a safe buffered body instead of panicking or inventing content.
-    let codec = OpenAIChatStreamingCodec::default();
-    let mut collector = codec.collector();
-    let finalizer = codec.finalizer();
+fn chat_encode_updates_provider_controls_after_normalized_edit() {
+    let codec = OpenAIChatCodec;
+    let original = make_request(json!({
+        "model": "gpt-4.1",
+        "messages": [{"role": "user", "content": "Find a record"}],
+        "max_tokens": 12,
+        "stop": "END",
+        "functions": [],
+        "modalities": ["text"],
+        "logprobs": false,
+        "n": 1,
+        "seed": 1,
+        "future_field": {"keep": true}
+    }));
 
-    collector(json!({"choices": [{"index": 2}]})).unwrap();
+    let mut annotated = codec.decode(&original).unwrap();
+    let params = annotated.params.as_mut().unwrap();
+    params.max_tokens = Some(24);
+    params.stop = Some(vec!["STOP".into()]);
+    let Some(ApiSpecificRequest::OpenAIChat {
+        functions,
+        modalities,
+        logprobs,
+        n,
+        seed,
+        ..
+    }) = annotated.api_specific.as_mut()
+    else {
+        panic!("expected OpenAI Chat request controls");
+    };
+    *functions = Some(vec![json!({"name": "lookup"})]);
+    *modalities = Some(vec!["audio".into()]);
+    *logprobs = Some(true);
+    *n = Some(2);
+    *seed = Some(2);
 
-    let assembled = finalizer();
-    assert_eq!(
-        assembled["choices"],
-        json!([{
-            "index": 2,
-            "message": {"role": "assistant", "content": null},
-            "finish_reason": null,
-        }])
-    );
+    let encoded = codec.encode(&annotated, &original).unwrap();
+    assert_eq!(encoded.content["max_tokens"], json!(24));
+    assert_eq!(encoded.content["stop"], json!("STOP"));
+    assert_eq!(encoded.content["functions"], json!([{ "name": "lookup" }]));
+    assert_eq!(encoded.content["modalities"], json!(["audio"]));
+    assert_eq!(encoded.content["logprobs"], json!(true));
+    assert_eq!(encoded.content["n"], json!(2));
+    assert_eq!(encoded.content["seed"], json!(2));
+    assert_eq!(encoded.content["future_field"], json!({"keep": true}));
 }

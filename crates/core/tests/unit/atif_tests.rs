@@ -1774,7 +1774,14 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
         .name("gpt-test-model")
         .scope_type(ScopeType::Llm)
         .input(json!({
-            "input": "Summarize the Codex worker result.",
+            "input": [{
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize the Codex"},
+                    {"type": "text", "text": "worker result."}
+                ]
+            }],
             "model": "gpt-test-model",
             "prompt_cache_key": "codex-child-thread"
         }))
@@ -1789,11 +1796,15 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
             "status": "completed",
             "output": [
                 {
+                    "type": "output_text",
+                    "text": "Codex worker summary"
+                },
+                {
                     "type": "message",
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "Codex worker summary complete."
+                            "text": "complete."
                         }
                     ]
                 }
@@ -1820,7 +1831,7 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
     assert_eq!(user_step.source, "user");
     assert_eq!(
         user_step.message,
-        json!("Summarize the Codex worker result.")
+        json!("Summarize the Codex\nworker result.")
     );
     let user_extra: AtifStepExtra =
         serde_json::from_value(user_step.extra.clone().unwrap()).unwrap();
@@ -1829,7 +1840,7 @@ fn test_exporter_openai_responses_lifecycle_extracts_messages() {
 
     let agent_step = &trajectory.steps[1];
     assert_eq!(agent_step.source, "agent");
-    assert_eq!(agent_step.message, json!("Codex worker summary complete."));
+    assert_eq!(agent_step.message, json!("Codex worker summary\ncomplete."));
     assert_eq!(agent_step.model_name, Some("gpt-test-model".to_string()));
     let metrics = agent_step.metrics.as_ref().unwrap();
     assert_eq!(metrics.prompt_tokens, Some(11));
@@ -3688,7 +3699,7 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
         }))
         .output(json!({
             "choices": [{"message": {"content": "dedupe_ok"}}],
-            "usage": {"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10}
+            "usage": {"completion_tokens": 3, "gateway_usage": 1}
         }))
         .build();
     let mut hook_end = event_builder(hook_uuid, EventType::End)
@@ -3701,7 +3712,10 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
             "api_call_id": "session:task:abcd:api:1",
             "provider_payload_exact": true
         }))
-        .output(json!({"content": "dedupe_ok"}))
+        .output(json!({
+            "content": "dedupe_ok",
+            "usage": {"prompt_tokens": 7, "hook_usage": 1}
+        }))
         .build();
 
     for (idx, event) in [
@@ -3746,7 +3760,8 @@ fn test_exporter_dedupes_overlapping_hook_and_gateway_llm_spans() {
     let metrics = trajectory.steps[1].metrics.as_ref().unwrap();
     assert_eq!(metrics.prompt_tokens, Some(7));
     assert_eq!(metrics.completion_tokens, Some(3));
-    assert_eq!(metrics.extra.as_ref().unwrap()["total_tokens"], json!(10));
+    assert_eq!(metrics.extra.as_ref().unwrap()["hook_usage"], json!(1));
+    assert_eq!(metrics.extra.as_ref().unwrap()["gateway_usage"], json!(1));
 }
 
 #[test]

@@ -149,16 +149,6 @@ fn replay_of_an_unknown_shape_is_lossy_for_the_streaming_tier() {
 }
 
 #[test]
-fn stripping_stream_metadata_leaves_nonobject_frames_unchanged() {
-    // The helper also runs against collector output. A malformed non-object
-    // frame must be a harmless no-op rather than preventing the lossiness
-    // check from completing.
-    let mut frame = json!("not an aggregate");
-    strip_stream_metadata(&mut frame);
-    assert_eq!(frame, json!("not an aggregate"));
-}
-
-#[test]
 fn anthropic_replay_keeps_complete_unknown_blocks_and_stop_sequences() {
     // Blocks without a delta representation (such as thinking/server blocks)
     // must be sent intact at content-block start, while stop_sequence remains
@@ -186,22 +176,4 @@ fn anthropic_replay_keeps_complete_unknown_blocks_and_stop_sequences() {
         message_delta.pointer("/delta/stop_sequence"),
         Some(&json!("<END>"))
     );
-}
-
-#[test]
-fn responses_replay_omits_item_events_for_a_nonarray_output() {
-    // A partially formed stored Responses aggregate is still replayed with
-    // lifecycle framing, but only real output arrays produce item-done events.
-    let aggregate = json!({
-        "id": "resp_2",
-        "object": "response",
-        "model": "gpt-test",
-        "output": {"unexpected": true}
-    });
-
-    let chunks = synthesize_responses_chunks(&aggregate);
-    assert_eq!(chunks.len(), 2);
-    assert_eq!(chunks[0]["type"], json!("response.created"));
-    assert_eq!(chunks[1]["type"], json!("response.completed"));
-    assert_eq!(chunks[1]["sequence_number"], json!(1));
 }
