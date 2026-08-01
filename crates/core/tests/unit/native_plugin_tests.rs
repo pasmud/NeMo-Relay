@@ -155,14 +155,10 @@ unsafe extern "C" fn record_typed_llm_stream_open(
     let _ = sender.send(result);
 }
 
-fn test_dispatch_target(
-    url: &str,
-    route: nemo_relay_plugin::LlmContinuationRouteV2,
-) -> nemo_relay_plugin::LlmContinuationTargetV2 {
+fn test_dispatch_target(url: &str) -> nemo_relay_plugin::LlmContinuationTargetV2 {
     nemo_relay_plugin::LlmContinuationTargetV2 {
         method: "POST".into(),
         url: url.into(),
-        route,
         headers: BTreeMap::new(),
     }
 }
@@ -949,7 +945,6 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
                     target.url().as_str(),
                     "https://provider.example/v1/chat/completions"
                 );
-                assert_eq!(target.route(), "openai_chat");
                 assert_eq!(
                     target
                         .headers()
@@ -977,10 +972,7 @@ fn native_api_v2_unary_dispatch_uses_explicit_target_and_structured_failures() {
             },
             target: nemo_relay_plugin::LlmContinuationTargetV2 {
                 headers: BTreeMap::from([("authorization".into(), "Bearer target-secret".into())]),
-                ..test_dispatch_target(
-                    "https://provider.example/v1/chat/completions",
-                    nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-                )
+                ..test_dispatch_target("https://provider.example/v1/chat/completions")
             },
         })
         .unwrap(),
@@ -1054,10 +1046,7 @@ fn native_api_v2_releasing_next_cancels_a_pending_targeted_call() {
                 headers: Map::new(),
                 content: json!({}),
             },
-            target: test_dispatch_target(
-                "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-            ),
+            target: test_dispatch_target("https://provider.example/v1/chat/completions"),
         })
         .unwrap(),
     )
@@ -1123,10 +1112,7 @@ fn native_api_v2_rejects_non_absolute_dispatch_targets_before_continuation() {
                 headers: Map::new(),
                 content: json!({}),
             },
-            target: test_dispatch_target(
-                "/v1/chat/completions",
-                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-            ),
+            target: test_dispatch_target("/v1/chat/completions"),
         })
         .unwrap(),
     )
@@ -1157,10 +1143,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
         headers: Map::new(),
         content: json!({}),
     };
-    let mut target = test_dispatch_target(
-        "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-    );
+    let mut target = test_dispatch_target("https://provider.example/v1/chat/completions");
     target.method = "CONNECT".into();
     assert_eq!(
         prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
@@ -1172,10 +1155,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
     );
     assert_last_error_contains("method was invalid or prohibited");
 
-    let mut target = test_dispatch_target(
-        "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-    );
+    let mut target = test_dispatch_target("https://provider.example/v1/chat/completions");
     target
         .headers
         .insert("x-nemo-relay-internal-dispatch-url".into(), "secret".into());
@@ -1189,10 +1169,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
     );
     assert_last_error_contains("host-owned or prohibited");
 
-    let mut target = test_dispatch_target(
-        "https://provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-    );
+    let mut target = test_dispatch_target("https://provider.example/v1/chat/completions");
     target
         .headers
         .insert("host".into(), "attacker.invalid".into());
@@ -1206,10 +1183,7 @@ fn native_api_v2_rejects_prohibited_target_methods_and_headers() {
 
 #[test]
 fn native_api_v2_rejects_target_url_credentials() {
-    let target = test_dispatch_target(
-        "https://user:secret@provider.example/v1/chat/completions",
-        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-    );
+    let target = test_dispatch_target("https://user:secret@provider.example/v1/chat/completions");
     assert_eq!(
         prepare_llm_continuation_invocation(LlmContinuationInvocationV2 {
             request: LlmRequest {
@@ -1333,8 +1307,9 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
                 assert_eq!(
                     current_llm_dispatch_target()
                         .expect("typed target is bound")
-                        .route(),
-                    "anthropic_messages"
+                        .url()
+                        .as_str(),
+                    "https://provider.example/v1/messages"
                 );
                 Ok(LlmJsonStream::new(tokio_stream::iter(vec![
                     Ok(json!({"type": "content_block_delta", "delta": {"text": "hi"}})),
@@ -1369,10 +1344,7 @@ fn native_api_v2_stream_dispatch_reports_chunks_and_a_typed_late_failure() {
                 headers: Map::new(),
                 content: json!({"model": "provider/model", "stream": true}),
             },
-            target: test_dispatch_target(
-                "https://provider.example/v1/messages",
-                nemo_relay_plugin::LlmContinuationRouteV2::AnthropicMessages,
-            ),
+            target: test_dispatch_target("https://provider.example/v1/messages"),
         })
         .unwrap(),
     )
@@ -1850,10 +1822,7 @@ fn native_api_v2_handles_256_concurrent_buffered_dispatches() {
                 headers: Map::new(),
                 content: json!({"model": "provider/model"}),
             },
-            target: test_dispatch_target(
-                "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-            ),
+            target: test_dispatch_target("https://provider.example/v1/chat/completions"),
         })
         .unwrap(),
     )
@@ -1940,10 +1909,9 @@ fn native_api_v2_isolates_concurrent_dispatch_targets() {
                         "authorization".into(),
                         format!("Bearer target-{index}"),
                     )]),
-                    ..test_dispatch_target(
-                        &format!("https://provider-{index}.example/v1/chat/completions"),
-                        nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-                    )
+                    ..test_dispatch_target(&format!(
+                        "https://provider-{index}.example/v1/chat/completions"
+                    ))
                 },
             })
             .unwrap(),
@@ -2027,10 +1995,7 @@ fn native_api_v2_handles_64_concurrent_100_event_provider_streams() {
                 headers: Map::new(),
                 content: json!({"model": "provider/model", "stream": true}),
             },
-            target: test_dispatch_target(
-                "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-            ),
+            target: test_dispatch_target("https://provider.example/v1/chat/completions"),
         })
         .unwrap(),
     )
@@ -2572,10 +2537,7 @@ fn test_v2_dispatch_json() -> *mut NemoRelayNativeString {
     native_string_from_json(
         &serde_json::to_value(LlmContinuationInvocationV2 {
             request: test_llm_request(),
-            target: test_dispatch_target(
-                "https://provider.example/v1/chat/completions",
-                nemo_relay_plugin::LlmContinuationRouteV2::OpenaiChat,
-            ),
+            target: test_dispatch_target("https://provider.example/v1/chat/completions"),
         })
         .unwrap(),
     )
